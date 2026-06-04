@@ -46,22 +46,20 @@ impl Iterator for CodeWalkIter {
         if let Some(buf) = self.buffered.take() {
             return Some(buf.map_err(crate::error::CodewalkError::Ignore));
         }
-        loop {
-            match self.inner.next() {
-                Some(res) => {
-                    if let Some(err) = self.error_slot.take() {
-                        self.buffered = Some(res);
-                        return Some(Err(err));
-                    }
-                    return Some(res.map_err(crate::error::CodewalkError::Ignore));
+        match self.inner.next() {
+            Some(res) => {
+                if let Some(err) = self.error_slot.take() {
+                    self.buffered = Some(res);
+                    return Some(Err(err));
                 }
-                None => {
-                    if let Some(err) = self.error_slot.take() {
-                        self.final_error_yielded = true;
-                        return Some(Err(err));
-                    }
-                    return None;
+                Some(res.map_err(crate::error::CodewalkError::Ignore))
+            }
+            None => {
+                if let Some(err) = self.error_slot.take() {
+                    self.final_error_yielded = true;
+                    return Some(Err(err));
                 }
+                None
             }
         }
     }

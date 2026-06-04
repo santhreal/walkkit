@@ -66,9 +66,7 @@ fn test_walker_single_file_root() -> Result<(), Box<dyn std::error::Error>> {
     let item = rx.recv().expect("Should yield single item");
     let file = match item {
         walkkit::WalkItem::File(f) => f,
-        walkkit::WalkItem::Error(e) => panic!("unexpected walk error: {e}"),
-        _ => panic!("unexpected non-file walk item"),
-    };
+        walkkit::WalkItem::Error(e) => panic!("unexpected walk error: {e}"),    };
     assert_eq!(file.path, file_path.as_path());
     assert_eq!(file.size, 5);
 
@@ -104,9 +102,7 @@ fn test_walker_max_depth_boundaries() -> Result<(), Box<dyn std::error::Error>> 
     let item = rx.recv().expect("Should find file at depth 4");
     let f = match item {
         walkkit::WalkItem::File(f) => f,
-        walkkit::WalkItem::Error(e) => panic!("unexpected walk error: {e}"),
-        _ => panic!("unexpected non-file walk item"),
-    };
+        walkkit::WalkItem::Error(e) => panic!("unexpected walk error: {e}"),    };
     assert_eq!(f.path.file_name().unwrap(), "d.txt");
 
     Ok(())
@@ -127,9 +123,7 @@ fn test_walker_size_limit_boundaries() -> Result<(), Box<dyn std::error::Error>>
     let item = rx.recv().expect("Should find one file");
     let f = match item {
         walkkit::WalkItem::File(f) => f,
-        walkkit::WalkItem::Error(e) => panic!("unexpected walk error: {e}"),
-        _ => panic!("unexpected non-file walk item"),
-    };
+        walkkit::WalkItem::Error(e) => panic!("unexpected walk error: {e}"),    };
     assert_eq!(f.path.file_name().unwrap(), "10_bytes.txt");
     assert!(rx.recv().is_err(), "Should filter out > 10 bytes");
     Ok(())
