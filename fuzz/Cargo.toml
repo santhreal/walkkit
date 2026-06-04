@@ -1,0 +1,25 @@
+[package]
+name = "walkkit-fuzz"
+description = "fuzz crate"
+keywords = ["rust", "library"]
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.85"
+repository = "https://github.com/santhsecurity/walkkit"
+homepage = "https://github.com/santhsecurity/walkkit"
+[package.metadata]
+cargo-fuzz = true
+
+license = "MIT OR Apache-2.0"
+[dependencies]
+libfuzzer-sys = "0.4"
+walkkit = { path = ".." }
+tempfile = "3"
+
+[[bin]]
+name = "fuzz_walk"
+description = "fuzz crate"
+keywords = ["rust", "library"]
+path = "fuzz_targets/fuzz_walk.rs"
+doc = false
