@@ -6,8 +6,8 @@ version = "0.0.0"
 publish = false
 edition = "2021"
 rust-version = "1.85"
-repository = "https://github.com/santhsecurity/walkkit"
-homepage = "https://github.com/santhsecurity/walkkit"
+repository = "https://github.com/santhreal/walkkit"
+homepage = "https://santh.dev"
 [package.metadata]
 cargo-fuzz = true
 

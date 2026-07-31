@@ -196,7 +196,11 @@ fn test_12_zero_parallelism_defaults_to_one() {
 fn test_13_large_binary_file_skipping() {
     let dir = tempdir().unwrap();
     let mut buf = vec![1u8; 1024 * 1024]; // 1MB
-    buf[500_000] = 0; // NUL byte deeply in the middle
+    // Binary detection samples the first 64 KiB (git/ripgrep heuristic), so the
+    // NUL that marks this file binary must sit within that prefix. A NUL only
+    // past the prefix is a documented non-detection (covered by
+    // test_adv_binary_nul_past_prefix_is_treated_as_text).
+    buf[1024] = 0;
     fs::write(dir.path().join("large.bin"), &buf).unwrap();
 
     let walker = Walker::new().add_root(dir.path()).skip_binary(true);
@@ -205,7 +209,10 @@ fn test_13_large_binary_file_skipping() {
         .unwrap()
         .filter_map(walkkit::WalkItem::into_file)
         .collect();
-    assert!(files.is_empty(), "Walker must scan the entire file or use smart heuristics to skip 1MB binary file containing NUL anywhere");
+    assert!(
+        files.is_empty(),
+        "a 1MB binary file with a NUL in the first 64 KiB must be skipped"
+    );
 }
 
 #[test]

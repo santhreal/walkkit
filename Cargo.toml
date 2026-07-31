@@ -15,11 +15,11 @@ tempfile = "=3.27.0"
 
 [package]
 name = "walkkit"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/santhsecurity/walkkit"
-homepage = "https://github.com/santhsecurity/walkkit"
+repository = "https://github.com/santhreal/walkkit"
+homepage = "https://santh.dev"
 authors = ["Santh Project <contact@santh.dev>"]
 rust-version = "1.85"
 description = "Parallel filesystem walker with ignore-aware traversal and bounded work queues"
@@ -29,18 +29,18 @@ categories = ["filesystem", "concurrency"]
 
 [dependencies]
 crossbeam-channel.workspace = true
-hashkit = { path = "../../indexing/hashkit", version = "0.1.1" }
+hashkit = { version = "0.1.1" }
 flate2 = { version = "=1.1.9", optional = true }
-globset = {workspace = true}
-ignore = {workspace = true}
-md5 = {workspace = true}
-serde = {workspace = true, features = ["derive"]}
+globset = { version = "=0.4.18" }
+ignore = { version = "=0.4.25" }
+md5 = { version = "=0.8.0" }
+serde = { version = "1.0.228", features = ["derive"] }
 thiserror.workspace = true
 tokio = { version = "=1.52.3", features = ["process", "time", "fs"] }
 toml = "=0.8.23"
 tracing = "=0.1.44"
 url = "=2.5.8"
-zstd = {workspace = true, default-features = false, optional = true}
+zstd = { version = "=0.13.3", default-features = false, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -54,8 +54,8 @@ zip-deflate = ["dep:flate2"]
 zstd = ["dep:zstd"]
 
 [dev-dependencies]
-criterion = {workspace = true}
-proptest = {workspace = true}
+criterion = { version = "0.5.1" }
+proptest = { version = "1.9.0" }
 tempfile.workspace = true
 
 [[bench]]
@@ -87,20 +87,20 @@ name = "regression"
 path = "tests/regression/mod.rs"
 
 [[test]]
-name = "test_legendary_unit"
-path = "tests/unit/test_legendary_unit.rs"
+name = "test_depth_unit"
+path = "tests/unit/test_depth_unit.rs"
 
 [[test]]
-name = "test_legendary_adversarial"
-path = "tests/adversarial/test_legendary_adversarial.rs"
+name = "test_depth_adversarial"
+path = "tests/adversarial/test_depth_adversarial.rs"
 
 [[test]]
-name = "test_legendary_property"
-path = "tests/property/test_legendary_property.rs"
+name = "test_depth_property"
+path = "tests/property/test_depth_property.rs"
 
 [[test]]
-name = "test_legendary_gap"
-path = "tests/unit/test_legendary_gap.rs"
+name = "test_depth_gap"
+path = "tests/unit/test_depth_gap.rs"
 
 [[test]]
 name = "core_tests"

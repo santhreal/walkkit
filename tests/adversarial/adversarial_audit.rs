@@ -251,11 +251,16 @@ fn test_adv_binary_large_no_nul() {
     );
 }
 
+/// Binary detection deliberately scans only the first 64 KiB prefix (the
+/// git/ripgrep sampling heuristic), a documented bounded-recall tradeoff. A NUL
+/// that sits past that prefix is therefore NOT detected and the file is treated
+/// as text. This test pins that intentional contract (it previously asserted the
+/// old unbounded full-file scan, which the prefix change deliberately removed).
 #[test]
-fn test_adv_binary_nul_at_10mb() {
+fn test_adv_binary_nul_past_prefix_is_treated_as_text() {
     let dir = TempDir::new().unwrap();
     let mut data = vec![b'A'; 10 * 1024 * 1024 + 1];
-    data[10 * 1024 * 1024] = 0;
+    data[10 * 1024 * 1024] = 0; // NUL at 10 MiB, far past the 64 KiB prefix.
     fs::write(dir.path().join("bin"), &data).unwrap();
     let walker = Walker::new().add_root(dir.path()).skip_binary(true);
     assert_eq!(
@@ -264,7 +269,28 @@ fn test_adv_binary_nul_at_10mb() {
             .unwrap()
             .filter_map(walkkit::WalkItem::into_file)
             .count(),
-        0
+        1,
+        "a NUL past the 64 KiB scan prefix is not detected (bounded-recall tradeoff)"
+    );
+}
+
+/// The companion contract: a NUL WITHIN the 64 KiB prefix IS detected, so the
+/// binary file is skipped. This locks the boundary the test above depends on.
+#[test]
+fn test_adv_binary_nul_within_prefix_is_skipped() {
+    let dir = TempDir::new().unwrap();
+    let mut data = vec![b'A'; 10 * 1024 * 1024];
+    data[1024] = 0; // NUL at 1 KiB, well within the 64 KiB prefix.
+    fs::write(dir.path().join("bin"), &data).unwrap();
+    let walker = Walker::new().add_root(dir.path()).skip_binary(true);
+    assert_eq!(
+        walker
+            .walk()
+            .unwrap()
+            .filter_map(walkkit::WalkItem::into_file)
+            .count(),
+        0,
+        "a NUL within the 64 KiB scan prefix must mark the file binary"
     );
 }
 

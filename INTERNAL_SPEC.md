@@ -31,7 +31,7 @@ Be the fastest, most correct, and most configurable directory walker in the Rust
 - Does not execute user-defined code during traversal.
 
 ## Quality State
-- Tests: 20+ declared test targets (unit, adversarial, concurrent, property, integration, regression, legendary)
+- Tests: 20+ declared test targets (unit, adversarial, concurrent, property, integration, regression, depth)
 - Lint preamble: yes
 - #![forbid(unsafe_code)]: yes
 - Doc coverage: ~90%

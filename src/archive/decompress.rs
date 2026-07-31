@@ -23,7 +23,7 @@ pub const DEFAULT_TOTAL_DECOMPRESSED_BUDGET: usize = 1024 * 1024 * 1024;
 /// # Example
 ///
 /// ```
-/// use archivewalk::decompress_gzip;
+/// use walkkit::archive::decompress_gzip;
 /// // Valid gzip data for an empty payload
 /// let gzip_data = [
 ///     0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -77,7 +77,7 @@ pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, ArchiveError> {
 /// # Example
 ///
 /// ```
-/// use archivewalk::decompress_zstd;
+/// use walkkit::archive::decompress_zstd;
 /// // Valid empty zstd frame
 /// let zstd_data = [0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x58, 0x01, 0x00, 0x00];
 /// let decompressed = decompress_zstd(&zstd_data).unwrap();

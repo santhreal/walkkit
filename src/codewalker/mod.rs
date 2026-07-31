@@ -233,26 +233,28 @@ impl FileEntry {
     pub fn content(&self) -> crate::error::Result<FileContent> {
         const MAX_CONTENT_AUTOLOAD: u64 = 256 * 1024 * 1024;
 
-        // Use the cached size from directory walk  -  avoids an extra stat() syscall.
-        // Re-stat only if the cached size exceeds the limit (rare edge case: file
-        // grew between walk and read).
-        if self.size > MAX_CONTENT_AUTOLOAD {
-            return Err(crate::error::CodewalkError::FileTooLarge(self.size));
+        // Re-stat the live file so that growth after the directory walk does
+        // not cause silent truncation. The cached size is only used as a hint
+        // for the initial allocation; the actual read proceeds to EOF.
+        let metadata = std::fs::metadata(&self.path)?;
+        let live_size = metadata.len();
+        if live_size > MAX_CONTENT_AUTOLOAD {
+            return Err(crate::error::CodewalkError::FileTooLarge(live_size));
         }
 
-        let read_limit = self.size;
-        let bounded_capacity = usize::try_from(read_limit).unwrap_or(READ_CHUNK_SIZE);
-        let mut bytes = Vec::with_capacity(bounded_capacity.min(READ_CHUNK_SIZE * 4));
+        let bounded_capacity = usize::try_from(live_size).unwrap_or(READ_CHUNK_SIZE);
+        let mut bytes = Vec::with_capacity(bounded_capacity);
 
-        for chunk in self.content_chunks()? {
-            let chunk = chunk?;
-            let remaining =
-                usize::try_from(read_limit.saturating_sub(bytes.len() as u64)).unwrap_or(0);
-            if remaining == 0 {
-                break;
-            }
-            let take = chunk.len().min(remaining);
-            bytes.extend_from_slice(&chunk[..take]);
+        // Read straight into `bytes` in one pass. `read_to_end` grows this single
+        // buffer by amortized doubling; the old loop over `content_chunks()`
+        // allocated a fresh 64 KiB `Vec` on every chunk and copied it in.
+        // `take(MAX + 1)` bounds the read so a file that grew past the cap after
+        // the walk is detected and rejected here rather than silently truncated,
+        // while never buffering more than MAX + 1 bytes.
+        let file = std::fs::File::open(&self.path)?;
+        let read = file.take(MAX_CONTENT_AUTOLOAD + 1).read_to_end(&mut bytes)?;
+        if read as u64 > MAX_CONTENT_AUTOLOAD {
+            return Err(crate::error::CodewalkError::FileTooLarge(read as u64));
         }
 
         if self.is_binary {
@@ -441,6 +443,77 @@ mod tests {
         assert_eq!(content.as_bytes(), b"hello world");
         assert_eq!(content.len(), 11);
         assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn file_content_read_larger_than_prealloc_cap_is_exact() {
+        // A file larger than the old 256 KiB (READ_CHUNK_SIZE * 4) pre-alloc cap
+        // must read back byte-exact across the multi-chunk path. This exercises
+        // the branch that previously reallocated repeatedly and now pre-allocates
+        // the full known size in one shot.
+        let dir = tempfile::tempdir().unwrap();
+        let size = READ_CHUNK_SIZE * 5 + 123; // 320 KiB + 123, spans several chunks
+        let mut expected = Vec::with_capacity(size);
+        // A non-repeating, non-UTF8-ambiguous byte pattern so a chunk-boundary
+        // off-by-one would corrupt the round-trip and fail the assert.
+        for i in 0..size {
+            expected.push((i % 251) as u8);
+        }
+        fs::write(dir.path().join("big.bin"), &expected).unwrap();
+
+        let config = WalkConfig {
+            skip_binary: false,
+            ..WalkConfig::default()
+        };
+        let walker = CodeWalker::new(dir.path(), config);
+        let entries = walker.walk().unwrap();
+        assert_eq!(entries.len(), 1);
+
+        let content = entries[0].content().unwrap();
+        assert_eq!(content.len(), size);
+        assert_eq!(content.as_bytes(), &expected[..]);
+    }
+
+    #[test]
+    fn file_content_reads_exact_chunk_multiple_boundary() {
+        // A file whose size is an EXACT multiple of READ_CHUNK_SIZE is the case
+        // most likely to expose an off-by-one at the read boundary. The single
+        // `read_to_end` path (which replaced the per-chunk-allocating loop) must
+        // return every byte with no truncation and no trailing over-read.
+        let dir = tempfile::tempdir().unwrap();
+        let size = READ_CHUNK_SIZE * 3; // exactly three chunks, no remainder
+        let expected: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        fs::write(dir.path().join("aligned.bin"), &expected).unwrap();
+
+        let config = WalkConfig {
+            skip_binary: false,
+            ..WalkConfig::default()
+        };
+        let walker = CodeWalker::new(dir.path(), config);
+        let entries = walker.walk().unwrap();
+        assert_eq!(entries.len(), 1);
+
+        let content = entries[0].content().unwrap();
+        assert_eq!(content.len(), size, "aligned file must read fully, no truncation");
+        assert_eq!(content.as_bytes(), &expected[..]);
+    }
+
+    #[test]
+    fn file_content_reads_grown_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grows.txt");
+        fs::write(&path, "small").unwrap();
+
+        let walker = CodeWalker::new(dir.path(), WalkConfig::default());
+        let entries = walker.walk().unwrap();
+        assert_eq!(entries.len(), 1);
+
+        // File grows after the directory walk; content() must read the full
+        // current bytes rather than silently stopping at the cached size.
+        fs::write(&path, "this is the full grown content").unwrap();
+
+        let content = entries[0].content().unwrap();
+        assert_eq!(content.as_bytes(), b"this is the full grown content");
     }
 
     #[test]

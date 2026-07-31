@@ -123,10 +123,64 @@ impl CodeWalker {
         })
     }
 
-    /// Total number of files (requires full walk  -  use for progress bars).
+    /// Total number of files.
+    ///
+    /// # Performance
+    /// This performs a full directory traversal that is independent from
+    /// [`Self::walk`], so calling both `count()` and `walk()` on the same
+    /// walker will visit the tree twice. For a single traversal that returns
+    /// both the entries and the count, use [`Self::walk_and_count`].
+    ///
+    /// # Panics
+    /// Panics if directory traversal or file processing fails. The old
+    /// implementation discarded such errors via `filter_map(Result::ok)` and
+    /// returned a silent undercount (Law 10); a count that quietly omits files
+    /// an operator asked to enumerate is a correctness bug. Use
+    /// [`Self::try_count`] for a fallible variant that returns the error.
+    // The panic is the documented contract of this infallible convenience
+    // wrapper; `try_count` is the fallible path.
+    #[allow(clippy::panic)]
     #[must_use]
     pub fn count(&self) -> usize {
-        self.walk_iter().filter_map(Result::ok).count()
+        self.try_count().unwrap_or_else(|e| {
+            panic!("CodeWalker::count: traversal failed: {e}; use try_count for a fallible variant")
+        })
+    }
+
+    /// Total number of files, propagating traversal/processing errors.
+    ///
+    /// Unlike [`Self::walk_and_count`] this does not materialize the entries, so
+    /// it counts without allocating a `Vec<FileEntry>`.
+    ///
+    /// # Errors
+    /// Returns an error if directory traversal fails or a file cannot be
+    /// processed, rather than silently undercounting.
+    pub fn try_count(&self) -> crate::error::Result<usize> {
+        let mut count = 0usize;
+        for result in self.walk_iter() {
+            result?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Walk the tree once and return both the entries and the total count.
+    ///
+    /// # Errors
+    /// Returns an error if directory traversal fails or a file cannot be processed.
+    pub fn walk_and_count(&self) -> crate::error::Result<(Vec<FileEntry>, usize)> {
+        let mut count = 0usize;
+        let entries = self
+            .walk_iter()
+            .filter_map(|result| match result {
+                Ok(entry) => {
+                    count += 1;
+                    Some(Ok(entry))
+                }
+                Err(err) => Some(Err(err)),
+            })
+            .collect::<crate::error::Result<Vec<FileEntry>>>()?;
+        Ok((entries, count))
     }
 
     pub(crate) fn build_walker_with_slot(&self) -> (ignore::Walk, FilterErrorSlot) {
@@ -252,6 +306,66 @@ mod tests {
         let walker = CodeWalker::new(dir.path(), WalkConfig::default());
         let count = walker.count();
         let entries = walker.walk().unwrap();
+        assert_eq!(count, entries.len());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_count_surfaces_traversal_error_instead_of_undercounting() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("public.txt"), "allowed").unwrap();
+
+        let blocked_dir = dir.path().join("blocked");
+        fs::create_dir(&blocked_dir).unwrap();
+        fs::write(blocked_dir.join("secret.txt"), "secret").unwrap();
+
+        let original_permissions = fs::metadata(&blocked_dir).unwrap().permissions();
+        let mut blocked_permissions = original_permissions.clone();
+        blocked_permissions.set_mode(0o000);
+        fs::set_permissions(&blocked_dir, blocked_permissions).unwrap();
+
+        // Root can traverse a 0o000 directory; only assert the loud behavior when
+        // the subtree is genuinely unreadable for the running user.
+        let reproducible = fs::read_dir(&blocked_dir).is_err();
+
+        let walker = CodeWalker::new(dir.path(), WalkConfig::default());
+        let try_count_result = walker.try_count();
+        // count() must fail closed (panic) rather than silently return an undercount.
+        let count_panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = walker.count();
+        }))
+        .is_err();
+
+        let _ = fs::set_permissions(&blocked_dir, original_permissions);
+
+        if reproducible {
+            assert!(
+                try_count_result.is_err(),
+                "try_count must propagate the traversal error, got {try_count_result:?}"
+            );
+            assert!(
+                count_panicked,
+                "count() must fail loud on a traversal error, not return a silent undercount"
+            );
+        }
+    }
+
+    #[test]
+    fn try_count_matches_walk_on_a_clean_tree() {
+        let dir = setup_test_dir();
+        let walker = CodeWalker::new(dir.path(), WalkConfig::default());
+        let count = walker.try_count().unwrap();
+        let entries = walker.walk().unwrap();
+        assert_eq!(count, entries.len());
+    }
+
+    #[test]
+    fn walk_and_count_single_pass() {
+        let dir = setup_test_dir();
+        let walker = CodeWalker::new(dir.path(), WalkConfig::default());
+        let (entries, count) = walker.walk_and_count().unwrap();
         assert_eq!(count, entries.len());
     }
 

@@ -48,7 +48,7 @@ pub(crate) enum DirId {
         volume_serial_number: u64,
         file_index: u64,
     },
-    #[cfg(all(not(unix), not(windows)))]
+    #[cfg(not(unix))]
     Other(PathBuf),
 }
 
@@ -80,18 +80,27 @@ fn dir_id_internal(
 
 #[cfg(windows)]
 fn dir_id_internal(
-    _path: &Path,
+    path: &Path,
     meta: &fs::Metadata,
-    _follow_symlinks: bool,
+    follow_symlinks: bool,
 ) -> std::io::Result<DirId> {
     use std::os::windows::fs::MetadataExt;
-    Ok(DirId::Windows {
-        volume_serial_number: meta.volume_serial_number().unwrap_or(0),
-        file_index: meta.file_index().unwrap_or(0),
-    })
+    // If the kernel does not expose volume/file IDs, fall back to path identity so
+    // two unrelated directories cannot be mistaken for each other due to default 0s.
+    match (meta.volume_serial_number(), meta.file_index()) {
+        (Some(vsn), Some(idx)) => Ok(DirId::Windows {
+            volume_serial_number: u64::from(vsn),
+            file_index: idx,
+        }),
+        _ => {
+            let resolved = if follow_symlinks { path.canonicalize()? } else { path.to_path_buf() };
+            Ok(DirId::Other(resolved))
+        }
+    }
 }
 
 #[cfg(all(not(unix), not(windows)))]
+#[allow(dead_code)]
 fn dir_id_internal(
     path: &Path,
     _meta: &fs::Metadata,
@@ -320,3 +329,24 @@ impl Walker {
         });
     }
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dir_id_distinguishes_two_windows_directories() {
+        // Even when volume/file IDs are unavailable, the fallback must not
+        // collapse two different directories into the same key (the old default
+        // 0, 0 behaviour). Canonical path identity keeps them distinct.
+        let dir_a = tempfile::TempDir::new().unwrap();
+        let dir_b = tempfile::TempDir::new().unwrap();
+        let meta_a = std::fs::metadata(dir_a.path()).unwrap();
+        let meta_b = std::fs::metadata(dir_b.path()).unwrap();
+
+        let id_a = dir_id(dir_a.path(), &meta_a, false).unwrap();
+        let id_b = dir_id(dir_b.path(), &meta_b, false).unwrap();
+        assert_ne!(id_a, id_b, "two different directories must have different DirIds");
+    }
+}
+

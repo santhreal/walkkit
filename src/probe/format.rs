@@ -7,7 +7,7 @@ const ZIP_LOCAL_MAGIC: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
 const ZIP_EMPTY_MAGIC: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 const SNAPPY_FRAMED_MAGIC: [u8; 10] = [0xff, 0x06, 0x00, 0x00, b's', b'N', b'a', b'P', b'p', b'Y'];
 const TAR_USTAR_OFFSET: usize = 257;
-const TAR_USTAR_MAGIC: &[u8; 6] = b"ustar\0";
+const TAR_USTAR_MAGIC: &[u8; 5] = b"ustar";
 
 /// Recognized compression or outer-container format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -29,8 +29,6 @@ pub enum DecompressFormat {
     Zip,
     /// POSIX ustar tar stream.
     Tar,
-    /// Gzip-wrapped tar. Not returned by [`detect_format`] from outer magic alone.
-    TarGz,
 }
 
 impl DecompressFormat {
@@ -46,7 +44,6 @@ impl DecompressFormat {
             Self::Snappy => "snappy",
             Self::Zip => "zip",
             Self::Tar => "tar",
-            Self::TarGz => "tar.gz",
         }
     }
 }
@@ -117,6 +114,10 @@ mod tests {
 
         let mut tar = vec![0u8; 300];
         tar[257..263].copy_from_slice(b"ustar\0");
+        assert_eq!(detect_format(&tar), DecompressFormat::Tar);
+
+        // GNU tar uses a trailing space instead of a null terminator.
+        tar[257..263].copy_from_slice(b"ustar ");
         assert_eq!(detect_format(&tar), DecompressFormat::Tar);
     }
 

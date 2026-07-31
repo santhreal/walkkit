@@ -61,11 +61,18 @@ impl CodeWalker {
                     ignore::WalkState::Continue
                 })
             });
-            // After all workers finish, check for a final stashed error.
-            if let Some(err) = Arc::try_unwrap(error_slot)
-                .ok()
-                .and_then(|m| m.into_inner().ok())
-                .flatten()
+            // After walker.run returns, every worker thread has finished, so no
+            // other thread is touching error_slot. Lock and take the final
+            // stashed error directly. The previous Arc::try_unwrap approach
+            // SILENTLY DROPPED the error whenever any Arc clone still lingered
+            // (strong_count >= 2 -> try_unwrap returns Err -> .ok() = None):
+            // filter_entry closures held by the ignore walker keep clones alive,
+            // so the last error was routinely swallowed (Law 10). lock+take does
+            // not depend on the strong count and cannot swallow it.
+            if let Some(err) = error_slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
             {
                 let _ = tx.send(Err(err));
             }

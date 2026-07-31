@@ -3,8 +3,7 @@
 use crate::filter::CompiledFilter;
 use crate::walk_common::{
     build_walked_file, is_unresolvable_symlink, lock_work_state, metadata_for_path,
-    read_dir_sorted, wait_for_work,
-    ReadDirSorted, WalkOptions, WorkState,
+    read_dir_sorted, wait_for_work, ReadDirSorted, WalkOptions, WorkState,
 };
 use crate::walker::{dir_id, path_exceeds_walk_limit};
 use crate::{WalkError, WalkItem, WalkOp};
@@ -394,7 +393,7 @@ pub(crate) fn walk_multi_thread(
             active: 0,
             queue: roots
                 .into_iter()
-                .map(|path| (path.clone(), 0usize, path))
+                .map(|path| (path.clone(), 0usize, path, None))
                 .collect(),
             visited_dirs: std::collections::HashSet::new(),
             visited_files: std::collections::HashSet::new(),
@@ -432,7 +431,7 @@ pub(crate) fn walk_multi_thread(
                     }
                 };
 
-                let Some((path, depth, walk_root)) = path_item else {
+                let Some((path, depth, walk_root, carried_meta)) = path_item else {
                     break;
                 };
 
@@ -452,19 +451,25 @@ pub(crate) fn walk_multi_thread(
                     continue;
                 }
 
-                let meta = match metadata_for_path(&path, worker_options.follow_symlinks) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        if !is_unresolvable_symlink(&path, worker_options.follow_symlinks) {
-                            let _ = tx.send(WalkItem::Error(WalkError::new(
-                                path.clone(),
-                                WalkOp::Metadata,
-                                e,
-                            )));
+                // Reuse the metadata the parent worker already fetched for this
+                // entry during its child scan; only stat here for roots (carried
+                // == None), eliminating the redundant second stat per directory.
+                let meta = match carried_meta {
+                    Some(m) => m,
+                    None => match metadata_for_path(&path, worker_options.follow_symlinks) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            if !is_unresolvable_symlink(&path, worker_options.follow_symlinks) {
+                                let _ = tx.send(WalkItem::Error(WalkError::new(
+                                    path.clone(),
+                                    WalkOp::Metadata,
+                                    e,
+                                )));
+                            }
+                            dec_active(&state);
+                            continue;
                         }
-                        dec_active(&state);
-                        continue;
-                    }
+                    },
                 };
 
                 #[cfg(feature = "gitignore")]
@@ -558,11 +563,22 @@ pub(crate) fn walk_multi_thread(
                                     match child_meta {
                                         Ok(m) => {
                                             if m.is_dir() && recurse {
+                                                // Carry the metadata we just
+                                                // fetched so the worker that pops
+                                                // this dir does not stat it again.
                                                 dirs.push((
                                                     child_path,
                                                     depth + 1,
                                                     walk_root.clone(),
+                                                    Some(m),
                                                 ));
+                                            } else if m.is_dir() {
+                                                // When recursion is disabled,
+                                                // child directories are not walked
+                                                // and should not be yielded as files.
+                                                // Skip the redundant gitignore and
+                                                // build_walked_file work.
+                                                continue;
                                             } else {
                                                 #[cfg(feature = "gitignore")]
                                                 let child_ignored =

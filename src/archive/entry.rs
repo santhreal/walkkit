@@ -19,11 +19,11 @@ pub const MAX_ENTRIES: usize = 1_000_000;
 /// # Example
 ///
 /// ```
-/// use archivewalk::ArchiveEntry;
+/// use walkkit::archive::ArchiveEntry;
 /// let entry = ArchiveEntry {
 ///     name: "config.json".to_string(),
 ///     size: 2,
-///     data: vec![123, 125],
+///     data: vec![123, 125].into(), // Arc<[u8]>
 /// };
 /// assert_eq!(entry.size as usize, entry.data.len());
 /// ```

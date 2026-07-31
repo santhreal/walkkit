@@ -19,7 +19,7 @@ use crate::probe::format::{detect_format, DecompressFormat as ArchiveFormat};
 /// # Example
 ///
 /// ```no_run
-/// use archivewalk::auto_extract;
+/// use walkkit::archive::auto_extract;
 /// # let raw_bytes: &[u8] = &[];
 /// let entries = auto_extract(raw_bytes).unwrap();
 /// ```
@@ -168,7 +168,7 @@ fn decompress_zip_deflate(_data: &[u8], _expected_size: u64) -> Result<Vec<u8>, 
 /// # Example
 ///
 /// ```no_run
-/// use archivewalk::auto_extract_recursive;
+/// use walkkit::archive::auto_extract_recursive;
 /// # let raw_bytes: &[u8] = &[];
 /// let entries = auto_extract_recursive(raw_bytes, 3).unwrap();
 /// ```

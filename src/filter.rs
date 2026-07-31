@@ -208,6 +208,11 @@ fn symlink_depth(path: &Path) -> std::io::Result<usize> {
         let metadata = std::fs::symlink_metadata(&current)?;
         if metadata.file_type().is_symlink() {
             depth = depth.saturating_add(1);
+            // Resolve this symlink so that symlinks nested inside the
+            // resolved target are counted in the next iterations.
+            if let Ok(resolved) = std::fs::canonicalize(&current) {
+                current = resolved;
+            }
         }
     }
 

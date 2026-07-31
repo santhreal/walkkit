@@ -10,7 +10,7 @@ use std::str;
 /// Build tar bytes (or read from disk), then iterate:
 ///
 /// ```no_run
-/// use archivewalk::TarReader;
+/// use walkkit::archive::TarReader;
 /// # let raw: &[u8] = &[];
 /// let _entries: Vec<_> = TarReader::entries(raw).collect::<Result<Vec<_>, _>>().unwrap();
 /// ```
@@ -313,6 +313,11 @@ fn join_path(prefix: String, name: String) -> String {
 }
 
 fn parse_octal_field(field: &[u8], label: &str, offset: usize) -> Result<u64, ArchiveError> {
+    // GNU/POSIX base-256 (binary) encoding: the high bit of the first byte is
+    // set. Used for size/offset fields that exceed the 8 GiB octal ceiling.
+    if field.first().is_some_and(|b| b & 0x80 != 0) {
+        return parse_base256_field(field, label, offset);
+    }
     let raw = field
         .iter()
         .copied()
@@ -338,19 +343,55 @@ fn parse_octal_field(field: &[u8], label: &str, offset: usize) -> Result<u64, Ar
     })
 }
 
+/// Big-endian base-256 (binary) numeric field, GNU/POSIX star extension.
+///
+/// The high bit of the first byte flags base-256. `0x80` in the first byte is a
+/// positive sentinel (masked off); `0xff` flags a negative value, which is not a
+/// valid size/offset and is rejected rather than silently wrapped.
+fn parse_base256_field(field: &[u8], label: &str, offset: usize) -> Result<u64, ArchiveError> {
+    let first = field[0];
+    if first == 0xff {
+        return Err(ArchiveError::InvalidHeader {
+            offset,
+            message: format!(
+                "{label} uses negative base-256 encoding, which is not a valid size. Fix: reject corrupted archives with negative numeric fields."
+            ),
+        });
+    }
+    let mut value: u64 = u64::from(first & 0x7f);
+    for &b in &field[1..] {
+        value = value
+            .checked_mul(256)
+            .and_then(|v| v.checked_add(u64::from(b)))
+            .ok_or_else(|| ArchiveError::InvalidHeader {
+                offset,
+                message: format!(
+                    "{label} base-256 value overflows u64. Fix: reject corrupted archives with oversized fields."
+                ),
+            })?;
+    }
+    Ok(value)
+}
+
 fn checksum_valid(block: &[u8]) -> bool {
-    let mut sum: u32 = 0;
+    // Historic tar writers computed the header checksum treating bytes as either
+    // unsigned or signed chars. Accept either so archives written by both
+    // conventions (signed-char sums differ once any field byte has the high bit
+    // set, e.g. non-ASCII names or base-256 fields) validate.
+    let mut unsigned_sum: u32 = 0;
+    let mut signed_sum: i32 = 0;
     for (i, &b) in block.iter().enumerate() {
-        if (148..156).contains(&i) {
-            sum += u32::from(b' ');
-        } else {
-            sum += u32::from(b);
-        }
+        let val = if (148..156).contains(&i) { b' ' } else { b };
+        unsigned_sum += u32::from(val);
+        signed_sum += i32::from(val as i8);
     }
     let Ok(stored) = parse_octal_field(&block[148..156], "checksum", 0) else {
         return false;
     };
-    u64::from(sum) == stored
+    let Ok(stored) = i64::try_from(stored) else {
+        return false;
+    };
+    i64::from(unsigned_sum) == stored || i64::from(signed_sum) == stored
 }
 
 /// Computes padding with checked arithmetic to prevent 32-bit truncation.
@@ -411,5 +452,54 @@ mod tar_tests {
             "short data should produce exactly 1 Truncated error"
         );
         assert!(results[0].is_err(), "result should be an error");
+    }
+
+    #[test]
+    fn parse_octal_field_reads_base256_size() {
+        // 12-byte size field, base-256 encoding of 10 GiB (0x2_8000_0000),
+        // which is beyond the 8 GiB octal ceiling. First byte 0x80 = positive.
+        let value: u64 = 10 * 1024 * 1024 * 1024;
+        let mut field = [0u8; 12];
+        field[0] = 0x80;
+        // big-endian bytes of `value` in the low 8 bytes of the 12-byte field.
+        field[4..12].copy_from_slice(&value.to_be_bytes());
+        let parsed = parse_octal_field(&field, "size", 0).expect("base-256 size parses");
+        assert_eq!(parsed, value);
+    }
+
+    #[test]
+    fn parse_octal_field_rejects_negative_base256() {
+        let mut field = [0u8; 12];
+        field[0] = 0xff; // negative sentinel
+        assert!(parse_octal_field(&field, "size", 0).is_err());
+    }
+
+    #[test]
+    fn parse_base256_field_overflow_fails_closed() {
+        // 12 payload bytes all 0xff after a 0x80 lead would exceed u64.
+        let field = [0x80u8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        assert!(parse_octal_field(&field, "size", 0).is_err());
+    }
+
+    #[test]
+    fn checksum_valid_accepts_signed_char_convention() {
+        // Build a block whose name contains a high-bit byte so signed and
+        // unsigned sums diverge, then store the SIGNED sum. checksum_valid must
+        // still accept it via the signed path.
+        let mut block = [0u8; 512];
+        block[0] = 0xC3; // non-ASCII name byte (high bit set)
+        // Compute the signed-char checksum with the checksum field as spaces.
+        let mut signed_sum: i32 = 0;
+        for (i, &b) in block.iter().enumerate() {
+            let val = if (148..156).contains(&i) { b' ' } else { b };
+            signed_sum += i32::from(val as i8);
+        }
+        // Store as 6 octal digits + NUL + space per tar convention.
+        let octal = format!("{signed_sum:06o}\0 ");
+        block[148..156].copy_from_slice(octal.as_bytes());
+        assert!(
+            checksum_valid(&block),
+            "signed-char checksum convention must validate"
+        );
     }
 }

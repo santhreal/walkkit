@@ -9,7 +9,7 @@ use super::tar::validate_path_traversal;
 /// # Example
 ///
 /// ```no_run
-/// use archivewalk::ZipReader;
+/// use walkkit::archive::ZipReader;
 /// # let zip_bytes: &[u8] = &[];
 /// let entries = ZipReader::entries(zip_bytes).unwrap();
 /// for entry in &entries {

@@ -4,7 +4,7 @@ use crate::filter::CompiledFilter;
 use crate::walker::WalkedFile;
 use crate::{WalkError, WalkOp};
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn metadata_for_path(
@@ -29,38 +29,33 @@ pub(crate) fn is_unresolvable_symlink(path: &Path, follow_symlinks: bool) -> boo
             .unwrap_or(false)
 }
 
-fn scan_file_for_nul(file: &mut File, file_len: u64) -> std::io::Result<bool> {
+/// Detect a binary file by sampling its leading bytes for a NUL.
+///
+/// Binary formats (executables, images, archives, compiled objects) carry NUL
+/// bytes within their header, so scanning a bounded prefix is sufficient to
+/// classify them - and avoids reading whole multi-megabyte files just to decide
+/// whether to skip one. We scan the first [`PREFIX_SCAN_BYTES`] (64 KiB) and
+/// short-circuit on the first NUL. A file whose only NUL sits past that prefix
+/// is treated as text, matching the prefix-sampling heuristic git/ripgrep use
+/// (a real binary would have NULs far earlier). Previously this read the ENTIRE
+/// file for anything up to 10 MiB, an O(file) pessimization on large text files.
+fn scan_file_for_nul(file: &mut File) -> std::io::Result<bool> {
     const SAMPLE_SIZE: usize = 8192;
-    const FULL_READ_LIMIT: u64 = 10 * 1024 * 1024;
+    const PREFIX_SCAN_BYTES: u64 = 64 * 1024;
 
-    if file_len <= FULL_READ_LIMIT {
-        let mut buf = [0u8; SAMPLE_SIZE];
-        loop {
-            match file.read(&mut buf) {
-                Ok(0) => return Ok(false),
-                Ok(n) => {
-                    if buf[..n].contains(&0) {
-                        return Ok(true);
-                    }
+    let mut buf = [0u8; SAMPLE_SIZE];
+    let mut scanned: u64 = 0;
+    while scanned < PREFIX_SCAN_BYTES {
+        match file.read(&mut buf)? {
+            0 => break,
+            n => {
+                if buf[..n].contains(&0) {
+                    return Ok(true);
                 }
-                Err(e) => return Err(e),
+                scanned += n as u64;
             }
         }
     }
-
-    let mut buf = [0u8; SAMPLE_SIZE];
-    let stride = 64 * 1024u64;
-    let mut offset = 0u64;
-
-    while offset < file_len {
-        file.seek(SeekFrom::Start(offset))?;
-        let n = file.read(&mut buf)?;
-        if buf[..n].contains(&0) {
-            return Ok(true);
-        }
-        offset += stride;
-    }
-
     Ok(false)
 }
 
@@ -88,7 +83,7 @@ fn is_binary_same_fd(
                 "Fix: file identity changed between stat and open (TOCTOU); retry the walk.",
             ));
         }
-        scan_file_for_nul(&mut file, got.len())
+        scan_file_for_nul(&mut file)
     }
     #[cfg(not(unix))]
     {
@@ -100,7 +95,36 @@ fn is_binary_same_fd(
                 "Fix: file size changed between stat and open (TOCTOU); retry the walk.",
             ));
         }
-        scan_file_for_nul(&mut file, got.len())
+        scan_file_for_nul(&mut file)
+    }
+}
+
+/// Decide whether `path` is EXCLUDED by an extension filter of `required`.
+///
+/// `required == ""` means "keep only files that have no extension". The
+/// comparison is done over the extension's raw OS bytes
+/// ([`OsStr::as_encoded_bytes`]) with ASCII-case folding, NOT via a lossy
+/// `to_str`. That matters for a filesystem walker that must handle non-UTF-8
+/// names: the old `path.extension().and_then(OsStr::to_str)` mapped a non-UTF-8
+/// extension to `None`, so such a file was mis-classified as "extensionless"
+/// (wrongly KEPT when filtering for extensionless files, and never able to be
+/// matched byte-for-byte). Comparing bytes fixes both: a non-UTF-8 extension
+/// correctly counts as "has an extension" and matches `required` iff the bytes
+/// are ASCII-case-equal.
+fn extension_excluded(path: &Path, required: &str) -> bool {
+    match (required.is_empty(), path.extension()) {
+        // Want extensionless, file has none: keep.
+        (true, None) => false,
+        // Want extensionless but the file HAS an extension (even a non-UTF-8
+        // one): exclude.
+        (true, Some(_)) => true,
+        // Want a specific extension but the file has none: exclude.
+        (false, None) => true,
+        // Want a specific extension: exclude unless the raw bytes match
+        // ASCII-case-insensitively.
+        (false, Some(ext)) => !ext
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(required.as_bytes()),
     }
 }
 
@@ -119,14 +143,7 @@ pub(crate) fn build_walked_file(
     if size_limit.is_some_and(|max_bytes| meta.len() > max_bytes) {
         return Ok(None);
     }
-    if extension_filter.is_some_and(|required| {
-        let actual_ext = path.extension().and_then(std::ffi::OsStr::to_str);
-        match (required.is_empty(), actual_ext) {
-            (true, None) => false,
-            (true, Some(_)) | (false, None) => true,
-            (false, Some(ext)) => !ext.eq_ignore_ascii_case(required),
-        }
-    }) {
+    if extension_filter.is_some_and(|required| extension_excluded(&path, required)) {
         return Ok(None);
     }
     if skip_binary {
@@ -204,7 +221,13 @@ pub(crate) fn read_dir_sorted(
 
 pub(crate) struct WorkState {
     pub(crate) active: usize,
-    pub(crate) queue: Vec<(PathBuf, usize, PathBuf)>,
+    /// Queue items: (path, depth, walk_root, pre-fetched metadata).
+    ///
+    /// The metadata is `Some` when the parent worker already stat-ed this entry
+    /// while scanning its directory children (see worker.rs child scan), so the
+    /// popping worker reuses it instead of issuing a second, redundant `stat` for
+    /// the same path. Roots are enqueued with `None` (never stat-ed yet).
+    pub(crate) queue: Vec<(PathBuf, usize, PathBuf, Option<std::fs::Metadata>)>,
     pub(crate) visited_dirs: std::collections::HashSet<crate::walker::DirId>,
     pub(crate) visited_files: std::collections::HashSet<PathBuf>,
 }
@@ -236,5 +259,118 @@ pub(crate) fn wait_for_work<'a>(
     match condvar.wait(guard) {
         Ok(guard) => guard,
         Err(error) => error.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod extension_filter_tests {
+    use super::extension_excluded;
+    use std::path::Path;
+
+    #[test]
+    fn ascii_extension_matching_is_case_insensitive() {
+        assert!(!extension_excluded(Path::new("a.rs"), "rs"));
+        assert!(!extension_excluded(Path::new("a.RS"), "rs"), "ASCII case-insensitive");
+        assert!(!extension_excluded(Path::new("a.rs"), "RS"));
+        assert!(extension_excluded(Path::new("a.rs"), "py"), "non-matching ext excluded");
+        assert!(extension_excluded(Path::new("archive.tar.gz"), "tar"), "only final ext counts");
+        assert!(!extension_excluded(Path::new("archive.tar.gz"), "gz"));
+    }
+
+    #[test]
+    fn empty_required_keeps_only_extensionless() {
+        assert!(!extension_excluded(Path::new("Makefile"), ""), "no ext, want extensionless: keep");
+        assert!(!extension_excluded(Path::new(".bashrc"), ""), "dotfile has no extension: keep");
+        assert!(extension_excluded(Path::new("a.rs"), ""), "has ext, want extensionless: exclude");
+    }
+
+    #[test]
+    fn missing_extension_excluded_when_specific_required() {
+        assert!(extension_excluded(Path::new("Makefile"), "rs"), "no ext, want rs: exclude");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_extension_is_compared_by_bytes_not_dropped() {
+        use std::ffi::{OsStr, OsString};
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::PathBuf;
+
+        // "file." + the non-UTF-8 bytes 0xFF 0xFE as the extension.
+        let mut name = OsString::from("file.");
+        name.push(OsStr::from_bytes(&[0xFF, 0xFE]));
+        let path = PathBuf::from(name);
+
+        // Regression: the old `path.extension().and_then(OsStr::to_str)` mapped
+        // this to None, so the file was mis-read as EXTENSIONLESS and wrongly
+        // KEPT when filtering for extensionless files. It has an extension, so
+        // it must be EXCLUDED.
+        assert!(
+            extension_excluded(&path, ""),
+            "a non-UTF-8 extension must count as HAVING an extension (excluded from an extensionless filter)"
+        );
+        // And its non-UTF-8 bytes never equal an ASCII required extension.
+        assert!(
+            extension_excluded(&path, "rs"),
+            "non-UTF-8 extension does not match the ASCII 'rs' filter"
+        );
+
+        // A valid ASCII extension on an otherwise non-UTF-8 filename still
+        // matches (byte compare), proving no regression for that case.
+        let mut stem = OsString::from("da");
+        stem.push(OsStr::from_bytes(&[0xFF]));
+        stem.push(OsStr::from_bytes(b".rs"));
+        let mixed = PathBuf::from(stem);
+        assert!(
+            !extension_excluded(&mixed, "rs"),
+            "a .rs file with a non-UTF-8 stem must still match the rs filter"
+        );
+    }
+}
+
+#[cfg(test)]
+mod nul_scan_tests {
+    use super::scan_file_for_nul;
+    use std::io::{Seek, SeekFrom, Write};
+
+    fn scan(bytes: &[u8]) -> bool {
+        let mut f = tempfile::tempfile().expect("temp file");
+        f.write_all(bytes).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        scan_file_for_nul(&mut f).unwrap()
+    }
+
+    #[test]
+    fn nul_in_prefix_is_binary() {
+        let mut v = b"text before".to_vec();
+        v.push(0);
+        v.extend_from_slice(b"more");
+        assert!(scan(&v), "a NUL in the leading bytes marks the file binary");
+    }
+
+    #[test]
+    fn pure_text_is_not_binary() {
+        // 100 KiB of text (larger than the 64 KiB prefix) with no NUL.
+        let v = vec![b'a'; 100 * 1024];
+        assert!(!scan(&v), "NUL-free text must not be classified binary");
+    }
+
+    #[test]
+    fn nul_past_prefix_is_treated_as_text() {
+        // Regression for walk_common.rs:36: only the first 64 KiB is sampled, so
+        // a lone NUL past the prefix (not a real binary) is treated as text and
+        // the whole multi-megabyte file is NOT read. 64 KiB of text, then a NUL.
+        let mut v = vec![b'a'; 64 * 1024];
+        v.push(0);
+        v.extend_from_slice(&vec![b'b'; 1024]);
+        assert!(!scan(&v), "NUL past the sampled prefix is not detected (bounded scan)");
+    }
+
+    #[test]
+    fn nul_at_edge_of_prefix_is_binary() {
+        // A NUL within the 64 KiB window is still caught.
+        let mut v = vec![b'a'; 60 * 1024];
+        v.push(0);
+        assert!(scan(&v), "NUL inside the prefix window is detected");
     }
 }
