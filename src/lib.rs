@@ -213,6 +213,23 @@ impl WalkItem {
             Self::Error(_) => None,
         }
     }
+    /// Returns the error payload if this is [`WalkItem::Error`].
+    #[must_use]
+    pub fn into_error(self) -> Option<WalkError> {
+        match self {
+            Self::File(_) => None,
+            Self::Error(e) => Some(e),
+        }
+    }
+
+    /// Borrow the [`WalkError`] when this is [`WalkItem::Error`].
+    #[must_use]
+    pub fn as_error(&self) -> Option<&WalkError> {
+        match self {
+            Self::File(_) => None,
+            Self::Error(e) => Some(e),
+        }
+    }
 }
 
 /// Errors returned by walkkit operations.

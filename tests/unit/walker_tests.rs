@@ -658,3 +658,88 @@ fn walk_symlink_cycle_does_not_hang() {
         .iter()
         .any(|f| f.path.to_string_lossy().contains("file.txt")));
 }
+#[test]
+fn walk_symlink_permission_denied_surfaces_error() {
+    let dir = TempDir::new().unwrap();
+    let unsearchable = dir.path().join("unsearchable");
+    fs::create_dir(&unsearchable).unwrap();
+    let target_file = unsearchable.join("target.txt");
+    fs::write(&target_file, "data").unwrap();
+
+    let link = dir.path().join("link_to_target");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::os::unix::fs::symlink(&target_file, &link).unwrap();
+        // Make directory unsearchable (mode 000) so stat on link_to_target returns PermissionDenied
+        fs::set_permissions(&unsearchable, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let walker = Walker::new()
+            .add_root(dir.path())
+            .follow_symlinks(true)
+            .with_parallelism(1);
+        let items: Vec<_> = walker.walk().unwrap().collect();
+        let errors: Vec<_> = items
+            .iter()
+            .filter_map(walkkit::WalkItem::as_error)
+            .collect();
+
+        // Restore permissions for cleanup
+        fs::set_permissions(&unsearchable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            !errors.is_empty(),
+            "permission denied accessing symlink target must surface WalkItem::Error"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.source.kind() == std::io::ErrorKind::PermissionDenied),
+            "expected PermissionDenied error in: {:?}",
+            errors
+        );
+    }
+}
+#[test]
+fn walk_parallel_symlink_permission_denied_surfaces_error() {
+    let dir = TempDir::new().unwrap();
+    let unsearchable = dir.path().join("unsearchable");
+    fs::create_dir(&unsearchable).unwrap();
+    let target_file = unsearchable.join("target.txt");
+    fs::write(&target_file, "data").unwrap();
+
+    let link = dir.path().join("link_to_target");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::os::unix::fs::symlink(&target_file, &link).unwrap();
+        fs::set_permissions(&unsearchable, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let walker = Walker::new()
+            .add_root(dir.path())
+            .follow_symlinks(true)
+            .with_parallelism(4);
+        let items: Vec<_> = walker.walk().unwrap().collect();
+        let errors: Vec<_> = items
+            .iter()
+            .filter_map(walkkit::WalkItem::as_error)
+            .collect();
+
+        // Restore permissions for cleanup
+        fs::set_permissions(&unsearchable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            !errors.is_empty(),
+            "permission denied accessing symlink target in parallel walk must surface WalkItem::Error"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.source.kind() == std::io::ErrorKind::PermissionDenied),
+            "expected PermissionDenied error in: {:?}",
+            errors
+        );
+    }
+}

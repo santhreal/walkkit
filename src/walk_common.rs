@@ -22,11 +22,30 @@ pub(crate) fn metadata_for_path(
 /// resolve while following links -- a loop (ELOOP/`FilesystemLoop`) or a dangling
 /// target. Such entries are non-traversable rather than hard errors, so callers
 /// skip them silently instead of emitting a `Metadata` error per broken link.
-pub(crate) fn is_unresolvable_symlink(path: &Path, follow_symlinks: bool) -> bool {
-    follow_symlinks
+pub(crate) fn is_unresolvable_symlink(
+    path: &Path,
+    e: &std::io::Error,
+    follow_symlinks: bool,
+) -> bool {
+    if !follow_symlinks {
+        return false;
+    }
+    let is_dangling_or_loop = e.kind() == std::io::ErrorKind::NotFound || is_eloop(e);
+
+    is_dangling_or_loop
         && fs::symlink_metadata(path)
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn is_eloop(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(not(unix))]
+fn is_eloop(_: &std::io::Error) -> bool {
+    false
 }
 
 /// Detect a binary file by sampling its leading bytes for a NUL.

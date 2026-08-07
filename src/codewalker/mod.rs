@@ -150,6 +150,7 @@ impl WalkConfig {
         self
     }
 
+
     /// Configure whether hidden files are skipped.
     #[must_use]
     pub fn skip_hidden(mut self, skip_hidden: bool) -> Self {

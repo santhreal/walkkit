@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.3] - 2026-08-07
+
+### Fixed
+- `is_unresolvable_symlink` now inspects the I/O error kind so `PermissionDenied` errors on symlink targets are correctly emitted as `WalkItem::Error` rather than silently swallowed.
+
+### Added
+- Added `WalkItem::into_error` and `WalkItem::as_error` convenience methods for symmetric error access.
 ## [0.1.2] - 2026-08-07
 
 ### Fixed

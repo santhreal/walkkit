@@ -15,7 +15,7 @@ tempfile = "=3.27.0"
 
 [package]
 name = "walkkit"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/santhreal/walkkit"
@@ -33,7 +33,7 @@ status = "stable"
 
 [dependencies]
 crossbeam-channel.workspace = true
-hashkit = { version = "0.1.1" }
+hashkit = { version = "0.1.2" }
 flate2 = { version = "=1.1.9", optional = true }
 globset = { version = "=0.4.18" }
 ignore = { version = "=0.4.25" }

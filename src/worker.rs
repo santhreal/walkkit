@@ -247,7 +247,7 @@ pub(crate) fn walk_single_thread(
         let meta = match metadata_for_path(&path, options.follow_symlinks) {
             Ok(m) => m,
             Err(e) => {
-                if is_unresolvable_symlink(&path, options.follow_symlinks) {
+                if is_unresolvable_symlink(&path, &e, options.follow_symlinks) {
                     continue;
                 }
                 let _ = tx.send(WalkItem::Error(WalkError::new(
@@ -463,7 +463,7 @@ pub(crate) fn walk_multi_thread(
                     None => match metadata_for_path(&path, worker_options.follow_symlinks) {
                         Ok(m) => m,
                         Err(e) => {
-                            if !is_unresolvable_symlink(&path, worker_options.follow_symlinks) {
+                            if !is_unresolvable_symlink(&path, &e, worker_options.follow_symlinks) {
                                 let _ = tx.send(WalkItem::Error(WalkError::new(
                                     path.clone(),
                                     WalkOp::Metadata,
@@ -642,6 +642,7 @@ pub(crate) fn walk_multi_thread(
                                         Err(e) => {
                                             if !is_unresolvable_symlink(
                                                 &child_path,
+                                                &e,
                                                 worker_options.follow_symlinks,
                                             ) {
                                                 let _ = tx.send(WalkItem::Error(WalkError::new(
