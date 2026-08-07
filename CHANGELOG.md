@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.2] - 2026-08-07
+
+### Fixed
+- Parallel walk termination now goes through one `signal_done_locked` helper.
+- Single- vs multi-thread walk equivalence covered by a differential test.
+- Added regression tests for `FileEntry::content` growth and autoload-cap fail-closed behavior.
+
+### Changed
+- Declared `package.metadata.santh.status = "stable"` (fuzz targets present).
+- Crate `authors` set to `Santh <64453045+santhreal@users.noreply.github.com>`.
+
 ## [0.1.1] - 2026-07-30
 
 ### Fixed

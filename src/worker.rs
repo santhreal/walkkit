@@ -368,12 +368,16 @@ pub(crate) fn walk_single_thread(
     }
 }
 
-fn dec_active(state: &std::sync::Arc<(std::sync::Mutex<WorkState>, std::sync::Condvar)>) {
-    let mut st = lock_work_state(&state.0);
+fn signal_done_locked(st: &mut WorkState, cv: &std::sync::Condvar) {
     st.active -= 1;
     if st.active == 0 && st.queue.is_empty() {
-        state.1.notify_all();
+        cv.notify_all();
     }
+}
+
+fn dec_active(state: &std::sync::Arc<(std::sync::Mutex<WorkState>, std::sync::Condvar)>) {
+    let mut st = lock_work_state(&state.0);
+    signal_done_locked(&mut st, &state.1);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -518,10 +522,7 @@ pub(crate) fn walk_multi_thread(
                         let mut st = lock_work_state(&state.0);
                         if !st.visited_dirs.insert(dir_key) {
                             tracing::debug!(path = %path.display(), "skipping directory: cycle detected");
-                            st.active -= 1;
-                            if st.active == 0 && st.queue.is_empty() {
-                                state.1.notify_all();
-                            }
+                            signal_done_locked(&mut st, &state.1);
                             continue;
                         }
                     }
@@ -683,10 +684,7 @@ pub(crate) fn walk_multi_thread(
                         Ok(Some(file)) => {
                             let mut st = lock_work_state(&state.0);
                             if !st.visited_files.insert(path) {
-                                st.active -= 1;
-                                if st.active == 0 && st.queue.is_empty() {
-                                    state.1.notify_all();
-                                }
+                                signal_done_locked(&mut st, &state.1);
                                 continue;
                             }
                             drop(st);
@@ -702,10 +700,7 @@ pub(crate) fn walk_multi_thread(
                 }
 
                 let mut st = lock_work_state(&state.0);
-                st.active -= 1;
-                if st.active == 0 && st.queue.is_empty() {
-                    state.1.notify_all();
-                }
+                signal_done_locked(&mut st, &state.1);
                 if channel_closed {
                     break;
                 }

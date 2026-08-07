@@ -9,3 +9,4 @@
 
 mod concurrency_stress;
 mod gitignore_test;
+mod differential_walk;

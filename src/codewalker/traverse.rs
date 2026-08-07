@@ -137,9 +137,6 @@ impl CodeWalker {
     /// returned a silent undercount (Law 10); a count that quietly omits files
     /// an operator asked to enumerate is a correctness bug. Use
     /// [`Self::try_count`] for a fallible variant that returns the error.
-    // The panic is the documented contract of this infallible convenience
-    // wrapper; `try_count` is the fallible path.
-    #[allow(clippy::panic)]
     #[must_use]
     pub fn count(&self) -> usize {
         self.try_count().unwrap_or_else(|e| {
@@ -172,12 +169,10 @@ impl CodeWalker {
         let mut count = 0usize;
         let entries = self
             .walk_iter()
-            .filter_map(|result| match result {
-                Ok(entry) => {
+            .inspect(|result| {
+                if result.is_ok() {
                     count += 1;
-                    Some(Ok(entry))
                 }
-                Err(err) => Some(Err(err)),
             })
             .collect::<crate::error::Result<Vec<FileEntry>>>()?;
         Ok((entries, count))

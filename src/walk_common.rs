@@ -115,11 +115,8 @@ fn extension_excluded(path: &Path, required: &str) -> bool {
     match (required.is_empty(), path.extension()) {
         // Want extensionless, file has none: keep.
         (true, None) => false,
-        // Want extensionless but the file HAS an extension (even a non-UTF-8
-        // one): exclude.
-        (true, Some(_)) => true,
-        // Want a specific extension but the file has none: exclude.
-        (false, None) => true,
+        // Want extensionless but file has one, or want extension but file has none: exclude.
+        (true, Some(_)) | (false, None) => true,
         // Want a specific extension: exclude unless the raw bytes match
         // ASCII-case-insensitively.
         (false, Some(ext)) => !ext
@@ -202,8 +199,7 @@ pub(crate) fn read_dir_sorted(
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             format!(
-                                "Fix: directory contains more than {} entries; increase max_dir_entries or split the directory.",
-                                max
+                                "Fix: directory contains more than {max} entries; increase max_dir_entries or split the directory."
                             ),
                         ));
                     }
@@ -221,10 +217,10 @@ pub(crate) fn read_dir_sorted(
 
 pub(crate) struct WorkState {
     pub(crate) active: usize,
-    /// Queue items: (path, depth, walk_root, pre-fetched metadata).
+    /// Queue items: (path, depth, `walk_root`, pre-fetched metadata).
     ///
     /// The metadata is `Some` when the parent worker already stat-ed this entry
-    /// while scanning its directory children (see worker.rs child scan), so the
+    /// while scanning its directory children (see `worker.rs` child scan), so the
     /// popping worker reuses it instead of issuing a second, redundant `stat` for
     /// the same path. Roots are enqueued with `None` (never stat-ed yet).
     pub(crate) queue: Vec<(PathBuf, usize, PathBuf, Option<std::fs::Metadata>)>,
